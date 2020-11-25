@@ -1,0 +1,340 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description:  'AWS CloudFormation Template: 
+   **WARNING** You will be billed for the AWS resources used if you create a stack
+  from this template.'
+
+#    MIT No Attribution
+# Copyright 2020 Amazon Web Services (AWS)
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Resources:
+
+  #VPC with the OpenSwan EC2. Will act as On-prem
+  VPC1:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/simple_vpc.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: DC-VPC
+        VpcCIDR: 10.0.0.0/24
+        PublicSubnet1CIDR: 10.0.0.0/27
+        PublicSubnet2CIDR: 10.0.0.32/27
+        PrivateSubnet1CIDR: 10.0.0.64/27
+        PrivateSubnet2CIDR: 10.0.0.96/27
+        CreateIGW: true
+        CreateNat: true
+      Tags: 
+      - Key: Name
+        Value: 'DC-VPC'
+      - Key: Project
+        Value: 'Glue-Demo'
+
+  #VPC where we will deploy our resources
+  VPC2:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/simple_vpc.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: Cloud-VPC
+        VpcCIDR: 10.0.1.0/24
+        PublicSubnet1CIDR: 10.0.1.0/27
+        PublicSubnet2CIDR: 10.0.1.32/27
+        PrivateSubnet1CIDR: 10.0.1.64/27
+        PrivateSubnet2CIDR: 10.0.1.96/27
+        CreateIGW: false
+        CreateNat: false
+      Tags: 
+      - Key: Name
+        Value: 'Cloud-VPC'
+      - Key: Project
+        Value: 'Glue-Demo'
+
+  #ElasticIP of the OpenSwan Instance
+  OpenswanEIP:
+    Type: AWS::EC2::EIP
+    Properties: 
+      Domain: vpc
+      Tags: 
+        - Key: Name
+          Value: 'Openswan EIP'
+        - Key: Project
+          Value: 'Glue-Demo'
+
+  #Create Random String to append to resources
+  RandomString:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/lambda_generate_random_string.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        StringLength: 6
+      Tags: 
+        - Key: Name
+          Value: 'Random String' 
+
+  #S3 Bucket where the processed data it's going to reside
+  GlueS3Bucket:
+    DependsOn: 
+    - RandomString
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration: 
+        RestrictPublicBuckets: true
+      BucketName:
+        Fn::Join:
+          - '-'
+          - ['glue-demo', !Ref "AWS::AccountId", !Ref "AWS::Region", !GetAtt RandomString.Outputs.RandomStringFromRandomStringResource ]      
+
+  #Create Random VPN PreShared Key
+  PreSharedKey:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/lambda_generate_random_string.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        StringLength: 32
+      Tags: 
+        - Key: Name
+          Value: 'PreShared Key for VPN' 
+
+  #VPN
+  VPNawsSide:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC1
+    - VPC2
+    - PreSharedKey
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/vpn.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: Cloud-VPC
+        VPCID: !GetAtt VPC2.Outputs.VPC
+        PrivateRouteTable1:  !GetAtt VPC2.Outputs.PrivateRouteTable1
+        CustomerGWIp: !Ref OpenswanEIP
+        DestinationCIDR: 10.0.0.0/24
+        VPNSecret: !GetAtt PreSharedKey.Outputs.RandomStringFromRandomStringResource
+      Tags: 
+        - Key: Name
+          Value: 'VPN'
+        - Key: Project
+          Value: 'Glue-Demo'
+
+  #Get VPN IPs
+  VPNIPs:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+      - VPNawsSide
+      - RandomString
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/lambda_get_vpn_ips.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        VpnConnectionId: !GetAtt VPNawsSide.Outputs.vpcVpnConnectionPrimary
+        LambdaFunctionName: 
+          Fn::Join:
+            - '-'
+            - ['get-outside-ip', !GetAtt RandomString.Outputs.RandomStringFromRandomStringResource ] 
+      Tags: 
+        - Key: Name
+          Value: 'VPN'
+  
+  #OpenSwan Instance and security groups
+  Openswan: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC1
+    - VPNIPs
+    - PreSharedKey
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/OpenSwan.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: DC-VPC
+        KeyName: OpenswanKeyPair
+        InstanceType: m4.large
+        LatestAmiId: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+        VPNIP1: !GetAtt VPNIPs.Outputs.VPNOutsideIP1
+        VPNIP2: !GetAtt VPNIPs.Outputs.VPNOutsideIP2
+        VPC1CIDR: 10.0.0.0/24
+        VPC2CIDR: 10.0.1.0/24
+        SubnetId: !GetAtt VPC1.Outputs.PublicSubnet1
+        OpenswanEIP: !Ref OpenswanEIP
+        PreSharedKey: !GetAtt PreSharedKey.Outputs.RandomStringFromRandomStringResource
+        VPCID: !GetAtt VPC1.Outputs.VPC
+      Tags: 
+        - Key: Name
+          Value: 'OpenSwan'
+
+  #Openswan instance ElasticIP Association
+  OpenswanEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    DependsOn: 
+    - OpenswanEIP
+    - Openswan
+    Properties: 
+      AllocationId: !GetAtt OpenswanEIP.AllocationId
+      InstanceId: !GetAtt Openswan.Outputs.InstanceId
+
+  #Get OpenSwan ENIID
+  OpenswanEniID:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: Openswan
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/lambda_get_primary_eni_id.yaml
+      TimeoutInMinutes: '20'
+      Parameters:
+        InstanceId: !GetAtt Openswan.Outputs.InstanceId 
+        LambdaFunctionName: 
+          Fn::Join:
+            - '-'
+            - ['get-primary-eni', !GetAtt RandomString.Outputs.RandomStringFromRandomStringResource ] 
+
+  #Private Instance - DC-VPC      
+  PrivateInstanceDCVPC: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC1
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/PrivateInstance.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: DC-VPC
+        KeyName: OpenswanKeyPair
+        InstanceType: t2.small
+        LatestAmiId: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+        VPC1CIDR: 10.0.0.0/24
+        VPC2CIDR: 10.0.1.0/24
+        SubnetId: !GetAtt VPC1.Outputs.PrivateSubnet1
+        VPCID: !GetAtt VPC1.Outputs.VPC
+      Tags: 
+        - Key: Name
+          Value: 'PrivateInstanceDCVPC'
+  
+  PrivateInstanceDCVPCPostgres: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC1
+    - RDS
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/InstancePostgres.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: DC-VPC
+        KeyName: OpenswanKeyPair
+        InstanceType: t2.small
+        LatestAmiId: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+        VPC1CIDR: 10.0.0.0/24
+        VPC2CIDR: 10.0.1.0/24
+        SubnetId: !GetAtt VPC1.Outputs.PrivateSubnet1
+        VPCID: !GetAtt VPC1.Outputs.VPC
+        RDSHostname: !GetAtt RDS.Outputs.RDSHostName
+      Tags: 
+        - Key: Name
+          Value: 'PrivateInstanceToPostgresDCVPC'
+
+  #Private Instance - Cloud-VPC      
+  PrivateInstanceCloudVPC: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC2
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/PrivateInstance.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: Cloud-VPC
+        KeyName: OpenswanKeyPair
+        InstanceType: t2.small
+        LatestAmiId: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+        VPC1CIDR: 10.0.0.0/24
+        VPC2CIDR: 10.0.1.0/24
+        SubnetId: !GetAtt VPC2.Outputs.PrivateSubnet1
+        VPCID: !GetAtt VPC2.Outputs.VPC
+      Tags: 
+        - Key: Name
+          Value: 'PrivateInstanceCloudVPC'
+
+  #Route in private subnets in VPC1 to VPC2
+  OpenswanPrivateRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: OpenswanEniID
+    Properties:
+      RouteTableId: !GetAtt VPC1.Outputs.PrivateRouteTable1
+      DestinationCidrBlock: 10.0.1.0/24
+      NetworkInterfaceId: !GetAtt OpenswanEniID.Outputs.PrimaryEniID
+
+  #RDS     
+  RDS: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC1
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/rds.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: DC-VPC
+        VPC: !GetAtt VPC1.Outputs.VPC
+        BackupRetentionPeriod: 7
+        PreferredBackupWindow: 17:00-19:00
+        PreferredMaintenanceWindow: Sun:19:00-Sun:23:00
+        InstanceType: db.m5.xlarge
+        MultiAvailabilityZone: 'false'
+        VPC1CIDR: 10.0.0.0/24
+        VPC2CIDR: 10.0.1.0/24
+        SubnetId1: !GetAtt VPC1.Outputs.PrivateSubnet1
+        SubnetId2: !GetAtt VPC1.Outputs.PrivateSubnet2
+      Tags: 
+        - Key: Name
+          Value: 'RDS-DC-VPCss'
+
+  #Glue resources
+  Glue: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn: 
+    - VPC2
+    - RDS
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/glue.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: Cloud-VPC
+        VPC: !GetAtt VPC2.Outputs.VPC
+        SubnetId: !GetAtt VPC2.Outputs.PrivateSubnet1
+        JdbcConnectionUrl: !GetAtt RDS.Outputs.JDBCConnectionString
+        PrivateRouteTable: !GetAtt VPC2.Outputs.PrivateRouteTable1
+        CrawlerName:
+          Fn::Join:
+            - '-'
+            - ['dbcrawler', !GetAtt RandomString.Outputs.RandomStringFromRandomStringResource ]           
+      Tags: 
+        - Key: Name
+          Value: 'RDS-DC-VPCss'
+
+  #Lambda to clean up resources in the created S3 bucket
+  CleanupBucket: 
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+    - GlueS3Bucket
+    Properties:
+      TemplateURL: !Sub https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/CleanupBucket.yaml
+      TimeoutInMinutes: '60'
+      Parameters:
+        EnvironmentName: Cloud-VPC
+        S3Bucket: !Ref GlueS3Bucket
+        RandomString: !GetAtt RandomString.Outputs.RandomStringFromRandomStringResource
+      Tags: 
+        - Key: Name
+          Value: 'CleanUpBucketLambda'

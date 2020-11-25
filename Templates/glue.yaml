@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+    Template that creates a AWS Glue resources.
+    **WARNING** This template creates AWS Glue resources
+    You will be billed for the AWS resources used if you create a stack
+    from this template.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  VPC:
+    Description: Select VPC.
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Description: Subnet ID of the AZ where to deploy Glue.
+    Type: String
+  JdbcConnectionUrl:
+    Description: Jdbc Connection Url for RDS instance.
+    Type: String
+  PrivateRouteTable:
+    Description: Private Route Table of the cloud VPC.
+    Type: String
+  CrawlerName:
+    Description: Name of the database crawler
+    Type: String
+  
+
+Resources:
+  #role for glue
+  glueDemoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - glue.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+
+  #Glue SG
+  GlueSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Self reference SG for Glue ENIs
+      VpcId:
+        Ref: VPC
+
+  GlueSGIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GlueSG
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref GlueSG  
+
+  #JDBC connection to DB
+  glueConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref 'AWS::AccountId'
+      ConnectionInput:
+        Description: "JDBC Connection to my DC DB"
+        PhysicalConnectionRequirements:
+          AvailabilityZone: !Select [ 0, !GetAZs  '' ] 
+          SecurityGroupIdList: 
+            - !Ref GlueSG
+          SubnetId: !Ref  SubnetId
+        ConnectionType: "JDBC"
+        ConnectionProperties: 
+          {
+            "JDBC_CONNECTION_URL": !Ref "JdbcConnectionUrl",
+            "USERNAME": "master",
+            "PASSWORD": "master123"
+          }
+
+  #Crawler eschema DB
+  crawlerDB:
+      Type: AWS::Glue::Database
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        DatabaseInput:
+          Name: !Ref CrawlerName
+          Description: "Glue Database to store dataset schema"
+          LocationUri: "LocationUri"
+          Parameters:
+            key1 : "value1"
+            key2 : "value2"
+
+  #Glue crawler
+  glueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties: 
+      DatabaseName: !Ref crawlerDB
+      Description: "schema of the db dataset"
+      Name: !Sub glue-${CrawlerName}
+      Role: !Ref glueDemoRole
+      TablePrefix: raw_
+      Targets: 
+        JdbcTargets:
+          - ConnectionName: !Ref glueConnection
+            Path: "sportstickets/%"
+  
+  #Endpoint for glue to be able to store the data in s3
+  s3Endpoint: 
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+      RouteTableIds: 
+        - !Ref PrivateRouteTable
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPC

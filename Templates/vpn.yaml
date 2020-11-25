@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+ 
+Description: >-
+  This template creates all the necessary for a site to site hardware vpn in AWS.
+  **WARNING** You will be billed for the AWS resources used if you create a stack
+  from this template.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+
+  VPCID:
+    Description: VPC id
+    Type: String
+
+  PrivateRouteTable1:
+    Description: Route Table of PrivateSubnet1
+    Type: String
+
+  CustomerGWIp:
+    Description: Please enter the IP address for the Customer Gateway
+    Type: String
+
+  DestinationCIDR:
+    Description: Please enter the Destination IP range (CIDR notation) 
+    Type: String  
+
+  VPNSecret:
+    Description: PreSharedkey for the VPN
+    Type: String    
+
+Resources:
+  #Create a customer gateway configuration (it gives the info of your customer GW)
+  vpcCustomerGateway:
+    Type: 'AWS::EC2::CustomerGateway'
+    Properties:
+      BgpAsn: 65000
+      IpAddress: !Ref CustomerGWIp
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Customer Gateway
+      Type: ipsec.1  
+  #Create a virtual private gateway
+  vpcVpnGateway:
+    Type: 'AWS::EC2::VPNGateway'
+    Properties:
+      Type: ipsec.1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} VPN Gateway
+  #Attach the VPN Gateway created above to your VPC
+  vpcVpnGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPCID
+      VpnGatewayId: !Ref vpcVpnGateway  
+  #Create a VPN connection
+  vpcVpnConnectionPrimary:
+    Type: 'AWS::EC2::VPNConnection'
+    Properties:
+      Type: ipsec.1
+      CustomerGatewayId: !Ref vpcCustomerGateway
+      StaticRoutesOnly: true
+      VpnTunnelOptionsSpecifications:
+      - PreSharedKey: !Ref VPNSecret
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} VPN Connection
+      VpnGatewayId: !Ref vpcVpnGateway
+  #Allow propagation of the static routes to the main route table of the VPC
+  vpcVpnGatewayRouteProp:
+    Type: 'AWS::EC2::VPNGatewayRoutePropagation'
+    Properties:
+      RouteTableIds:
+        - !Ref PrivateRouteTable1
+      VpnGatewayId: !Ref vpcVpnGateway
+    DependsOn: vpcVpnGatewayAttachment
+  #Add a static route from the customer network to your VPC
+  vpcConnectionRoutePrimary:
+    Type: 'AWS::EC2::VPNConnectionRoute'
+    Properties:
+      DestinationCidrBlock: !Ref DestinationCIDR
+      VpnConnectionId: !Ref vpcVpnConnectionPrimary
+
+Outputs:
+  vpcVpnGateway:
+    Description: VGW
+    Value: !Ref vpcVpnGateway
+  vpcVpnConnectionPrimary:
+    Description: VPN Connection
+    Value: !Ref vpcVpnConnectionPrimary    

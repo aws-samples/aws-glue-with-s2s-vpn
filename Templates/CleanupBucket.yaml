@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+    Template that creates a AWS Lambda to cleanup an S3 bucket.
+    **WARNING** 
+    You will be billed for the AWS resources used if you create a stack
+    from this template.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  S3Bucket:
+    Description: Bucket Name.
+    Type: String
+  RandomString:
+    Description: Random String to append to resources.
+    Type: String
+
+Resources:
+  CleanupBucket:
+    Type: Custom::cleanupbucketlambda
+    Properties:
+      ServiceToken:
+       Fn::GetAtt:
+          - "CleanupBucketLambda"
+          - "Arn"
+      BucketName: !Ref S3Bucket
+
+  CleanupLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/CleanupS3Lambda-${RandomString}
+      RetentionInDays: 30
+
+  CleanupBucketLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub CleanupBucketLambdaPolicy-${RandomString} 
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:DescribeLogStreams
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - s3:DeleteObject
+            - s3:ListBucket
+            Resource: '*'
+          - Effect: Allow
+            Action: s3:PutObject
+            Resource: !Join ['', ['arn:aws:s3:::', 'glue-demo-', !Ref "AWS::AccountId", '-' , !Ref "AWS::Region", /*]]
+          - Effect: Allow
+            Action: s3:PutEncryptionConfiguration
+            Resource: !Join ['', ['arn:aws:s3:::', 'glue-demo-', !Ref "AWS::AccountId", '-' , !Ref "AWS::Region"]]
+  
+  CleanupBucketLambda:
+    Type: AWS::Lambda::Function    
+    Properties:
+      FunctionName: !Sub CleanupBucketLambda-${RandomString} 
+      Handler: "index.lambda_handler"
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 60
+      Role: !GetAtt CleanupBucketLambdaRole.Arn
+      Code:
+        ZipFile: !Sub |
+            import json, boto3, logging, os, urllib3
+            import cfnresponse
+            logger = logging.getLogger()
+            logger.setLevel(logging.INFO)
+            AccountId = os.environ['AccountId']
+            S3Bucket = os.environ['S3Bucket']
+            def lambda_handler(event, context):
+                logger.info("event: {}".format(event))
+                try:
+                    bucket = event['ResourceProperties']['BucketName']
+                    logger.info("bucket: {}, event['RequestType']: {}".format(bucket,event['RequestType']))
+                    if event['RequestType'] == 'Delete':
+                        s3 = boto3.resource('s3')
+                        bucket = s3.Bucket(bucket)
+                        for obj in bucket.objects.filter():
+                            logger.info("delete obj: {}".format(obj))
+                            s3.Object(bucket.name, obj.key).delete()                 
+                    sendResponseCfn(event, context, cfnresponse.SUCCESS)
+                except Exception as e:
+                    logger.info("Exception: {}".format(e))
+                    sendResponseCfn(event, context, cfnresponse.FAILED)
+            def sendResponseCfn(event, context, responseStatus):
+                responseData = {}
+                responseData['Data'] = {}
+                cfnresponse.send(event, context, responseStatus, responseData, "CustomResourcePhysicalID")
+      Environment:
+        Variables:
+          Region:
+            !Ref "AWS::Region"
+          AccountId:
+            !Ref "AWS::AccountId"
+          S3Bucket:
+            Fn::Join:
+              - '-'
+              - ['glue-demo', !Ref "AWS::AccountId", !Ref "AWS::Region", !Ref RandomString ] 

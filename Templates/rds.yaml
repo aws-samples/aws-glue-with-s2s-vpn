@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+   Template to launch an RDS instance.
+   **WARNING** You will be billed for the AWS resources used if you create a stack
+   from this template.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  # Network
+  VPC:
+    Description: Select VPC.
+    Type: AWS::EC2::VPC::Id
+  VPC1CIDR:
+    Description: The IP address range of the DC vpc
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x. 
+  VPC2CIDR:
+    Description: The IP address range of the Cloud vpc
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x. 
+  SubnetId1:
+    Description: Subnet ID of the first AZ.
+    Type: String
+  SubnetId2:
+    Description: Subnet ID of the second AZ.
+    Type: String
+  # Backup Settings
+  BackupRetentionPeriod:
+    Description: Enter Backup Retention Period in Days.
+    Type: Number
+    Default: 7
+  PreferredBackupWindow:
+    Description: Enter Preferred Backup Window Time (UTC).
+    Type: String
+    Default: 17:00-19:00
+  PreferredMaintenanceWindow:
+    Description: Enter Preferred Maintenance Window Time (UTC).
+    Type: String
+    Default: Sun:19:00-Sun:23:00
+  # Hardware
+  InstanceType:
+    Type: String
+    Default: db.m5.xlarge
+    AllowedValues:
+    - db.t1.micro
+    - db.t2.micro
+    - db.t2.small
+    - db.t2.medium
+    - db.t2.large
+    - db.m1.small
+    - db.m1.medium
+    - db.m1.large
+    - db.m1.xlarge
+    - db.m3.medium
+    - db.m3.large
+    - db.m3.xlarge
+    - db.m3.2xlarge
+    - db.m4.large
+    - db.m4.xlarge
+    - db.m4.2xlarge
+    - db.m4.4xlarge
+    - db.m4.10xlarge
+    - db.r3.large
+    - db.r3.xlarge
+    - db.r3.2xlarge
+    - db.r3.4xlarge
+    - db.m5.xlarge
+  MultiAvailabilityZone:
+    Description: Enable Multi Availability Zones?
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'false'
+
+Resources:
+  RDSAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS SG
+      VpcId:
+         Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        CidrIp: !Ref VPC1CIDR
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        CidrIp: !Ref VPC2CIDR
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RDS-sg
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB subnetgroup
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    DependsOn:
+    - DbSubnetGroup
+    - RDSAccessSecurityGroup
+    Properties:
+      AllocatedStorage: 30
+      AllowMajorVersionUpgrade: false
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DBInstanceClass: !Ref InstanceType
+      DBName: sportstickets
+      MasterUsername: master
+      MasterUserPassword: master123
+      DBInstanceIdentifier: !Ref AWS::StackName
+      Engine: postgres
+      EngineVersion: 10.14
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      MultiAZ: !Ref MultiAvailabilityZone
+      Port: 5432
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      PubliclyAccessible: false
+      StorageEncrypted: false
+      StorageType: gp2
+      VPCSecurityGroups:
+      - !Ref RDSAccessSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RDS-DC-VPC
+
+Outputs:
+  JDBCConnectionString:
+    Description: JDBC connection string for the database
+    Value: !Join ['', ['jdbc:postgresql://', !GetAtt [DbInstance, Endpoint.Address], ':', !GetAtt [
+          DbInstance, Endpoint.Port], /sportstickets]]
+  RDSHostName:
+    Description: Database hostname string
+    Value: !GetAtt [DbInstance, Endpoint.Address]
+

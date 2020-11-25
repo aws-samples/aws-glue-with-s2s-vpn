@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Metadata:
+  License: Apache-2.0
+
+Description: 'AWS CloudFormation Sample Template for OpenSwan instance creation:
+  Create an Amazon EC2 instance running OpenSwan. The AMI is chosen based
+  on the region in which the stack is run. This template creates an EC2 security group
+  for the instance to enable connectivity. **WARNING** This template creates an Amazon
+  EC2 instance. You will be billed for the AWS resources used if you create a stack
+  from this template.'
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t3.small
+    AllowedValues: [t2.nano, t2.micro, t2.small, t2.medium, t2.large, t2.xlarge, t2.2xlarge,
+      t3.nano, t3.micro, t3.small, t3.medium, t3.large, t3.xlarge, t3.2xlarge,
+      m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge, m4.10xlarge,
+      m5.large, m5.xlarge, m5.2xlarge, m5.4xlarge,
+      c5.large, c5.xlarge, c5.2xlarge, c5.4xlarge, c5.9xlarge,
+      g3.8xlarge,
+      r5.large, r5.xlarge, r5.2xlarge, r5.4xlarge, r3.12xlarge,
+      i3.xlarge, i3.2xlarge, i3.4xlarge, i3.8xlarge,
+      d2.xlarge, d2.2xlarge, d2.4xlarge, d2.8xlarge]
+    ConstraintDescription: must be a valid EC2 instance type.
+  LatestAmiId:
+    Type:  'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  VPNIP1:
+    Description: IP of the first VPN tunnel
+    Type: String
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
+    ConstraintDescription: must be a valid IP of the form x.x.x.x
+  VPNIP2:
+    Description: IP of the second VPN tunnel
+    Type: String
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
+    ConstraintDescription: must be a valid IP of the form x.x.x.x
+  VPC1CIDR:
+    Description: The IP address range of the AWS vpc
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x. 
+  VPC2CIDR:
+    Description: The IP address range of the AWS vpc
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.  
+  SubnetId:
+    Description: Id of the subnet in which OpenSwan instance will be deployed
+    Type: String
+  OpenswanEIP:
+    Description: Elastic IP of the OpenSwan instance
+    Type: String
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
+    ConstraintDescription: must be a valid IP of the form x.x.x.x  
+  PreSharedKey:
+    Description: Preshared key for the VPN
+    Type: String
+  VPCID:
+    Description: ID of the vpc
+    Type: String
+  
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref 'InstanceType'
+      SecurityGroupIds: [!Ref 'InstanceSecurityGroup']
+      KeyName: !Ref 'KeyName'
+      ImageId: !Ref 'LatestAmiId'
+      SubnetId: !Ref 'SubnetId'
+      SourceDestCheck: false
+      UserData: 
+        Fn::Base64: !Sub |
+          #! /bin/bash
+
+          yum install openswan -y
+
+          cat << EoF > /etc/ipsec.d/aws.conf
+          conn tunnel1 #This is the name of the VPN connection
+            type=tunnel
+            authby=secret
+            auto=start
+            left=%defaultroute
+            leftid=${OpenswanEIP} #This is your Openswan EIP
+            leftsubnet=${VPC1CIDR} #This is the subnet you are allowing VPN access to
+            leftnexthop=%defaultroute
+            right=${VPNIP1} #This is the public IP of the Remote VPN device
+            rightsubnet=${VPC2CIDR} #This is the remote subnet
+            pfs=yes #Perfect Forward Security
+            ike=aes128-sha1;modp1024 #IKE Encryption Policy and Diffie-Hellman Group #modp1536??
+            ikelifetime=28800s #IKE Lifetime
+            esp=aes128-sha1;modp1024 #ESP Encryption Policy and Diffie-Hellman Group #modp1536??
+            salifetime=28800s # IPSec Lifetime
+          EoF
+
+          cat << EoF > /etc/ipsec.d/aws.secrets
+          ${OpenswanEIP} ${VPNIP1}: PSK "${PreSharedKey}"
+          EoF
+
+          service ipsec start 
+
+          cat << EoF > /usr/lib/sysctl.d/90-custom.conf
+          net.ipv4.ip_forward = 1
+          EoF
+
+          service network restart
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable private traffic between DC-VPC and Cloud-VPC
+      VpcId: !Ref 'VPCID'
+      SecurityGroupIngress:
+      # - IpProtocol: -1
+      #   CidrIp: !Sub '${VPNIP1}/32'
+      # - IpProtocol: -1
+      #   CidrIp: !Sub '${VPNIP2}/32'
+      - IpProtocol: -1
+        CidrIp: !Ref 'VPC1CIDR'
+      - IpProtocol: -1
+        CidrIp: !Ref 'VPC2CIDR'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} OpenSwan
+        
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created EC2 instance
+    Value: !Ref 'EC2Instance'
+  AZ:
+    Description: Availability Zone of the newly created EC2 instance
+    Value: !GetAtt [EC2Instance, AvailabilityZone]

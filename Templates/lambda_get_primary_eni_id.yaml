@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+    Lambda function to find and return the primary network 
+    interface id for an instance.
+Parameters:
+  InstanceId:
+    Description: Identifer of the instance for which to obtain the primary network interface
+    Type: String
+  LambdaFunctionName:
+    Description: Name for the function
+    Type: String
+Resources:
+  PrimaryEni:
+      Type: Custom::PrimaryEniGenerator
+      Properties:
+        ServiceToken: !GetAtt PrimaryEniGenerator.Arn
+        INSTANCEID: !Ref InstanceId 
+  PrimaryEniGenerator:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunctionName}'
+      Handler: "index.lambda_handler"
+      Timeout: 15
+      Role: !GetAtt 'LambdaRole.Arn'
+      Runtime: python3.6
+      Code:
+        ZipFile: |
+          import logging
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              instance_id = event['ResourceProperties'].get('INSTANCEID', None)
+              ec2client = boto3.client('ec2')
+              response = ec2client.describe_instances(InstanceIds=[ instance_id ])
+              responseData = {}
+              responseData['PrimaryEniId'] = response['Reservations'][0]['Instances'][0]['NetworkInterfaces'][0]['NetworkInterfaceId']
+              logger.info('responseData {}'.format(responseData))
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-vpc
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                Resource:
+                  - "*"
+Outputs:
+  PrimaryEniID: 
+    Description: ID of the primary network interface for the given instance
+    Value: !GetAtt PrimaryEni.PrimaryEniId
+
+
