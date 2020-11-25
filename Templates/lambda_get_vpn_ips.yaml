@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+    Lambda function to find and return the two Outside
+    IP addresses for the VGW side of the VPN connection.
+    **WARNING** This template creates  and executes an Amazon Lambda Function
+    EC2 instance. You will be billed for the AWS resources used if you create a stack
+    from this template.
+Parameters:
+  VpnConnectionId:
+    Description: Identifer of the VPN for which to obtain the Outside IP addresses
+    Type: String
+  LambdaFunctionName:
+    Description: Name for the function
+    Type: String
+Resources:
+  VPNOutsideIP:
+      Type: Custom::VPNOutsideIPGenerator
+      Properties:
+        ServiceToken: !GetAtt VPNOutsideIPGenerator.Arn
+        VPNID: !Ref VpnConnectionId 
+  VPNOutsideIPGenerator:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunctionName}'
+      Handler: "index.lambda_handler"
+      Timeout: 15
+      Role: !GetAtt 'LambdaRole.Arn'
+      Runtime: python3.6
+      Code:
+        ZipFile: |
+          import logging
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              vpn_connection_id = event['ResourceProperties'].get('VPNID', None)
+              ec2client = boto3.client('ec2')
+              response = ec2client.describe_vpn_connections(VpnConnectionIds=[ vpn_connection_id ])
+              responseData = {}
+              responseData['OutsideIpAddress1'] = response['VpnConnections'][0]['VgwTelemetry'][0]['OutsideIpAddress']
+              responseData['OutsideIpAddress2'] = response['VpnConnections'][0]['VgwTelemetry'][1]['OutsideIpAddress']
+              logger.info('responseData {}'.format(responseData))
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-vpc
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeVpnConnections
+                Resource:
+                  - "*"
+Outputs:
+  VPNOutsideIP1: 
+    Description: First VPN Outside IP Address
+    Value: !GetAtt VPNOutsideIP.OutsideIpAddress1
+
+  VPNOutsideIP2: 
+    Description: Second VPN Outside IP Address
+    Value: !GetAtt VPNOutsideIP.OutsideIpAddress2
