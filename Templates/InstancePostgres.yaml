@@ -95,7 +95,7 @@ Resources:
             Fn::Base64: !Sub |
                #! /bin/bash
 
-               curl -L https://danonbd2.github.io/AWS-Demos/Templates/sample-data.csv > /tmp/sample-data.csv
+               curl -L https://aws-samples.github.io/aws-glue-with-s2s-vpn/Templates/sample-data.csv > /tmp/sample-data.csv
                sudo amazon-linux-extras install postgresql10
                export HOST=${RDSHostname};
                export USER="master";
