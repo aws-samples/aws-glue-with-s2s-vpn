@@ -145,7 +145,7 @@ aws cloudformation delete-stack --stack-name $STACKNAME
 
 Cheers!!
 
-## Authors
+## Contributors
 
 * Daniel Neri
 * Federica Ciuffo
