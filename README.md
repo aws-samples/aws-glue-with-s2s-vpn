@@ -24,7 +24,7 @@ On the other hand, in the DC-VPC, we have an EC2 instance configured with OpenSw
 
 ![Key_Pair](/images/KeyPair.png)
 
-2. Deploy the AWS Cloud Formation template by downloading the filed called "main.yaml" located in the "Templates" folder of this repo
+2. Deploy the AWS Cloud Formation template by downloading the file called "main.yaml" located in the "Templates" folder of this repo
 
 *NOTE*: The template takes 30 min to deploy approx.
 
