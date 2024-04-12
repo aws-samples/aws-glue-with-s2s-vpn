@@ -24,24 +24,8 @@ On the other hand, in the DC-VPC, we have an EC2 instance configured with OpenSw
 
 ![Key_Pair](/images/KeyPair.png)
 
-2. Deploy the AWS Cloud Formation template clicking on the button below:
+2. Deploy the AWS Cloud Formation template by downloading the filed called "main.yaml" located in the "Templates" folder of this repo
 
-[![Launch CFN stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateUrl=https%3A%2F%2Faws-glue-with-s2s-vpn.s3-eu-west-1.amazonaws.com%2FTemplates%2Fmain.yaml&stackName=aws-glue-with-s2s-vpn)
-
-**(Optional)** Or deploy the template with CLI:
-
-* If you don’t have the AWS CLI installed, follow [these](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html) steps. And to configure the AWS CLI, follow [these](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html#cli-configure-quickstart-config). 
-* Clone the repository.
-* Export the following parameters in your CLI:
-```bash 
-export AWSREGION=<YOUR AWS REGION>
-export AWSPROFILE=<YOUR AWS PROFILE>
-export STACKNAME=<THE NAME OF YOUR STACK>
-```
-* Go back to your terminal and create the CloudFormation stack:
-```bash
-aws cloudformation create-stack --stack-name $STACKNAME --template-url https://aws-glue-with-s2s-vpn.s3.amazonaws.com/Templates/main.yaml --tags Key=project,Value=glue-project --profile $AWSPROFILE --region=$AWSREGION --capabilities CAPABILITY_IAM
-```
 *NOTE*: The template takes 30 min to deploy approx.
 
 ## Explore your environment
